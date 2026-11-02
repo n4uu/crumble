@@ -101,6 +101,11 @@ win32, darwin and linux (OtterCookie branches on `os.platform()` for paths,
 clipboard and VM checks), `-root dir/` lets a multi-file npm package
 `require()` its own files, `-json` for piping.
 
+A `-stage` file that is valid JSON is served as `application/json`, so the
+HTTP stubs hand the sample a parsed object. That matters for builds that
+only open the socket.io connection after their registration call answers
+`{"success": true}`; see the first row of the validation table below.
+
 ## Decoding C2 traffic
 
 ```
@@ -198,16 +203,36 @@ deobfuscated text) in goja with a prelude that replaces `require()`:
 | --- | --- |
 | `socket.io-client` | records `io(url, opts)`, every `.on()` and `.emit()`; after the script settles, fires `connect`, then probes each custom event |
 | `axios`, `request`, `node-fetch`, `http(s)`, `fetch` | records method, URL, headers, body; answers with the `-stage` body and status |
-| `child_process` | records the command, never runs it; recon commands get believable canned output |
+| `child_process` | records the command, never runs it; recon commands get believable canned output. Code given to `node -` on stdin or to `node -e` is captured as a stage and run in the sandbox, the way current OtterCookie starts its modules |
+| `net` | records `connect` and every `write`; the socket connects on the next tick and gets the probe as a line of data |
 | `fs` | reads only from `-root`, records every write and probe |
 | `crypto` | real hashes; `createDecipheriv` records algorithm, key and IV |
 | `form-data`, `os`, `path`, `Buffer`, `URL`, timers | functional enough to keep samples on their happy path |
 | anything else | a recording proxy: every property is another proxy, every call is logged |
 
 `eval`, `new Function` and `new module.constructor()._compile()` are wrapped
-so the code passed to them is captured as a stage before it runs. Timers are
+so the code passed to them is captured as a stage before it runs. So are the
+routes that avoid the name: `Function.constructor`,
+`(function(){}).constructor` and the async and generator variants. Timers are
 virtual: callbacks fire in deadline order without waiting, intervals three
 times. A wall-clock budget stops anything that loops.
+
+Two javascript-obfuscator options target analysis directly. Self-defending
+code reads a function's own source with `toString()` and compares it with
+what minified output looks like; on reformatted code it either loops forever
+or runs `(((.+)+)+)+$`, which backtracks for hours inside the regex engine
+where the budget can't reach it. Both VMs make `Function.prototype.toString`
+return the source with line breaks removed, so a reformatted sample takes
+the same path as a minified one, and every regex match has a two second
+limit as a backstop. Debug protection builds `debugger` functions in a
+recursion with no base case and relies on Node's stack overflow being
+catchable; goja's isn't, so the stub throws the same `RangeError` straight
+away. Neither is reported as a stage.
+
+If a sample dies on its first statement with `ReferenceError: x is not
+defined`, crumble runs it again with `x` stubbed, up to four names. That is
+what BeaverTail looks like when it has been pasted after
+`module.exports = router;` in a real project file.
 
 goja is a pure-Go interpreter. The sample can only reach what the prelude
 hands it, and none of that opens a socket, spawns a process, or writes a
@@ -314,6 +339,48 @@ obfuscator actually emits rather than something written to make a test
 pass. The capture tests run the generated session through both pcap and
 pcapng, plus hand-built streams for out-of-order delivery, retransmits,
 sequence wraparound, chunked+gzip bodies and deflate context takeover.
+
+## Validation on real samples
+
+In November 2026 crumble was run over ten files from MalwareBazaar. There
+were only two under the `OtterCookie` tag, so the set was filled out with
+JavaScript tagged `BeaverTail` and `InvisibleFerret` from the same campaign.
+Nothing was executed outside crumble's sandbox. The extracted addresses were
+then looked up in ThreatFox (`search_ioc`, exact match on the IP:port, the
+host and the URL).
+
+The first pass, with the code as it was then, went badly: one sample hung
+past its time budget, two didn't parse, the obfuscated ones came back
+without a single indicator, and none got a verdict. Three of the ten gave a
+C2 address, all from strings. Every failure below traced back to crumble, so
+it was fixed in the code and a synthetic test added for each pattern
+(`internal/*/realworld_test.go`, `internal/jsdeob/selfdefend_test.go`). The
+table is the result after the fixes, with default flags unless the notes say
+otherwise.
+
+| SHA-256 | Family (MB tag) | First seen | C2 extracted | ThreatFox | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `049300aa5dd774d6c984779a0570f59610399c71864b5d5c2605906db46ddeb9` | OtterCookie | 2026-06-26 | socket.io `ws://216.126.225[.]243:8087`; uploads to `216.126.225[.]243:8085/upload` and `:8086/upload` | yes (`216.126.225[.]243:8087`, OtterCookie) | 430 KB, RC4 string array, self-defending and debug protection, reformatted. Before the fix the deobfuscator timed out on it. The main script starts three modules as `node -` and writes their source to stdin; crumble now runs them. The socket.io module only connects once `/api/notify` answers `{"success": true}`, so the socket.io C2 and the `command` -> `message` shell need `-stage ok.json`. With default flags you get the upload and logging endpoints and a "collection module" verdict. |
+| `ec234419fc512baded05f7b29fefbf12f898a505f62c43d3481aed90fef33687` | OtterCookie | 2025-06-04 | `hxxp://chainlink-api-v3[.]cloud/api/service/token/56e15ef3b5e5f169fc063f8d3e88288e` | not listed | ZIP of a fake betting project. The loader is `server/controllers/paymentController.js` (SHA-256 `52ee35f4e1d4e93fbc4568e9ddd4fc1f1237c310718e28a9cdb3f5c81a3360b7`), analysed on its own. Error-handler loader that runs the body through `new (Function.constructor)(...)`. Before the fix that route went unrecorded even with `-stage-status 500`. |
+| `f101fda6093f12758efae630bc265d6bad71479249685b7503c05e707424a276` | BeaverTail | 2026-07-10 | `hxxp://cleverstack-ext30341.vercel[.]app/api/package`, `/api/g?st=...` | not listed | A Windows batch dropper, not JavaScript. Used to fail with a parse error; now reported as "not JavaScript" with the URLs from the raw text. Nothing emulated. |
+| `281d4d60fc99cf7f54819defb1c7c14b9202d46890936c4c6b9ebe3ddc75dd2f` | BeaverTail | 2026-07-10 | raw TCP `5.230.122[.]63:15152`; `hxxp://cleverstack-ext30341.vercel[.]app/api/handle` (static) | not listed | Remote shell over `net.Socket` with JSON status lines. Two crumble bugs: folding a dead-code `if` cut off a closing parenthesis, which left unparsable output and zero indicators, and emulation never got past debug protection. Verdict is "raw TCP shell, no family match"; crumble has no rule tying this protocol to a family. |
+| `6db4c3d2ab56227d36eff59d1dc9e13eadf9959996fab1e0b04591cc5e637d04` | BeaverTail | 2026-07-10 | raw TCP `5.230.122[.]63:15152`; `hxxp://cleverstack-ext30341.vercel[.]app/api/handle` (static) | not listed | Same C2 and behaviour as the row above, obfuscated separately (312 array entries against 379). |
+| `1c3ea5b06b394e295c7313e87135f8fe62a85722bb95e5870287b98d2c4fe70f` | BeaverTail | 2025-09-17 | `hxxp://146.70.253[.]107:1224` (`/pdown`, `/uploads`, `/client/5346/64`); config from `hxxps://api.npoint[.]io/96979650f5739bcbaebb` | not listed | Ran far past its time budget (killed after two minutes): the self-defending regex on reformatted code. Used to be labelled an OtterCookie collection module; there was no BeaverTail rule. |
+| `bf7a54cf4ded7a2de2607d2a18def5c518c8bd2b1e38606c15332745031bddf5` | BeaverTail, InvisibleFerret | 2025-01-23 | `hxxp://94.232.247[.]192:1224/pdown` | not listed | Saved as the server sent it: `{"cookie": "<script>"}`. Used to fail with a parse error; the script is now taken from the JSON field. |
+| `40645f9052e03fed3a33a7e0f58bc2c263eeae02cbc855b9308511f5dc134797` | BeaverTail | 2023-12-22 | `hxxp://144.172.74[.]48:1224` (`/pdown`, `/node/20.11`) | not listed | Worked before, but only as static strings and with no verdict. The URLs are now marked as contacted, since the sample passes them to `curl`. |
+| `d0bb5390cdab85dbf283998abf9ba6c1b418c13596ed48ed21a7e3a58b6b82fd` | InvisibleFerret | 2024-12-04 | `hxxp://147.124.214[.]129:1244` (`/keys`, `/j/s0HhMg2`, `/p`) | not listed (host is in URLhaus) | Worked before apart from the verdict. |
+| `9caab205c9f41003f8eb66c13353659e07207ffada927f32755309d41c8af878` | InvisibleFerret | 2025-01-21 | `hxxp://147.124.214[.]129:1244/pdown` | not listed (host is in URLhaus) | Pasted after `module.exports = router;` and 240 spaces, so on its own it died on the first line. Now re-run with `router` stubbed. The C2 is assembled from base64 pieces, so nothing came out before. |
+
+Only one C2 in the set is in ThreatFox, and it matches. "Not listed" means
+ThreatFox has nothing for that IP:port, host or URL; it is not evidence the
+address is benign. Verdicts are still "consistent with". The BeaverTail
+rule keys on the URL layout from public reporting (`/pdown`, `/client/`,
+`/keys`, `/j/`), and the raw TCP build doesn't match it or anything else.
+
+One thing worth knowing about the current OtterCookie: its file scanner
+skips `.cursor`, `.windsurf` and `.claude`, next to `.vscode-server` and the
+Go caches. That's a skip list, presumably to keep upload size down. No
+sample contained text aimed at the analyst or at an LLM.
 
 ## Limitations
 
