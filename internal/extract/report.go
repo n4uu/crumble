@@ -76,6 +76,16 @@ func RenderText(r *Report) string {
 			fmt.Fprintf(&b, "  %-10s %s\n", "tasking", line)
 		}
 	}
+	for _, c := range r.TCP {
+		fmt.Fprintf(&b, "\ntcp %s\n", c.URL)
+		if c.Hello != "" {
+			fmt.Fprintf(&b, "  %-10s %s\n", "first", c.Hello)
+		}
+		fmt.Fprintf(&b, "  %-10s %d\n", "writes", c.Writes)
+		if c.CommandExec {
+			fmt.Fprintf(&b, "  %-10s %s\n", "tasking", "data from the server reached child_process")
+		}
+	}
 	if r.Identity != nil {
 		ev, _ := r.Identity["_event"].(string)
 		id := map[string]any{}
@@ -115,7 +125,11 @@ func RenderText(r *Report) string {
 	if len(r.Stages) > 0 {
 		b.WriteString("\nstages\n")
 		for _, s := range r.Stages {
-			fmt.Fprintf(&b, "  %-16s %7d bytes  sha256 %s\n", s.Via, s.Size, s.SHA256)
+			rep := ""
+			if s.Count > 1 {
+				rep = fmt.Sprintf("  (x%d)", s.Count)
+			}
+			fmt.Fprintf(&b, "  %-16s %7d bytes  sha256 %s%s\n", s.Via, s.Size, s.SHA256, rep)
 		}
 	}
 	if len(r.Crypto) > 0 {

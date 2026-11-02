@@ -221,14 +221,54 @@
     stage("eval", code);
     return realEval(code);
   };
+  // javascript-obfuscator's debug protection builds `debugger` and
+  // `while (true) {}` functions with the Function constructor from a
+  // function that calls itself with no base case, inside a try. In Node it
+  // ends when the stack overflows and the catch swallows the RangeError.
+  // goja's stack overflow can't be caught from JS, so throw that RangeError
+  // here instead: the sample's catch sees what it would see in Node, minus
+  // ten thousand compiled functions. Neither body is a stage; note it once.
+  const ANTIDEBUG = /^\s*(?:debugger|while\s*\(\s*true\s*\)\s*\{\s*\})\s*;?\s*$/;
+  const GLOBAL_THIS = /^\s*return\s*(?:this|\(\s*function\s*\(\s*\)\s*\{\s*\}\.constructor\(\s*["']return this["']\s*\)\(\s*\)\s*\))\s*;?\s*$/;
+  let antidebugSeen = false;
+  function construct(Real, via, self, args) {
+    const body = args.length ? String(args[args.length - 1]) : "";
+    // The obfuscator's own global-object lookup; not worth a stage.
+    if (GLOBAL_THIS.test(body)) return Real.apply(self, args);
+    if (ANTIDEBUG.test(body)) {
+      if (!antidebugSeen) {
+        antidebugSeen = true;
+        rec("antidebug", { via: via, body: body.trim() });
+      }
+      throw new RangeError("Maximum call stack size exceeded");
+    }
+    stage(via, body);
+    return Real.apply(self, args);
+  }
   const RealFunction = Function;
   const FakeFunction = function (...args) {
-    const body = args.length ? String(args[args.length - 1]) : "";
-    stage("Function", body);
-    return RealFunction.apply(this, args);
+    return construct(RealFunction, "Function", this, args);
   };
   FakeFunction.prototype = RealFunction.prototype;
   g.Function = FakeFunction;
+  // Loaders also reach the constructor without naming Function:
+  // Function.constructor, (function(){}).constructor, and the async and
+  // generator variants. All of them resolve through a prototype's
+  // constructor property, so point those at recording wrappers too.
+  function setConstructor(proto, fn) {
+    Object.defineProperty(proto, "constructor", { value: fn, writable: true, enumerable: false, configurable: true });
+  }
+  function hookConstructor(proto, via) {
+    const Real = proto.constructor;
+    const Fake = function (...args) {
+      return construct(Real, via, this, args);
+    };
+    Fake.prototype = proto;
+    setConstructor(proto, Fake);
+  }
+  setConstructor(RealFunction.prototype, FakeFunction);
+  hookConstructor(Object.getPrototypeOf(async function () {}), "AsyncFunction");
+  hookConstructor(Object.getPrototypeOf(function* () {}), "GeneratorFunction");
 
   // ------------------------------------------------------------------ http
 
@@ -514,8 +554,11 @@
   }
 
   // Probe text handed to custom events. A handler that forwards it to
-  // child_process shows up in the trace as exec("echo crumble-probe").
-  const PROBE = "echo crumble-probe";
+  // child_process shows up in the trace as exec("echo crumble-probe:<event>").
+  // The event name is in the text because handlers are often async: by the
+  // time one reaches exec, the next event may already have been probed.
+  const PROBE = "echo crumble-probe:";
+  const netSockets = [];
   host.drive = function (probe) {
     for (const entry of sockets) {
       for (const fn of entry.handlers["connect"] || []) {
@@ -528,7 +571,8 @@
       if (!probe) continue;
       for (const ev of Object.keys(entry.handlers)) {
         if (BUILTIN.indexOf(ev) >= 0) continue;
-        const payload = { message: PROBE, cmd: PROBE, command: PROBE, data: PROBE, toString: () => PROBE };
+        const text = PROBE + (ev === "*" ? "command" : ev);
+        const payload = { message: text, cmd: text, command: text, data: text, toString: () => text };
         for (const fn of entry.handlers[ev]) {
           rec("probe", { url: entry.url, event: ev });
           try {
@@ -540,17 +584,76 @@
         }
       }
     }
+    // Raw TCP sockets get the probe as a line of data from the server.
+    for (const s of netSockets) {
+      if (!probe || s.remoteAddress === undefined || s.destroyed) continue;
+      rec("probe", { url: "tcp://" + s.remoteAddress + ":" + s.remotePort, event: "data" });
+      try {
+        s.emit("data", Buffer.from(PROBE + "data\n"));
+      } catch (err) {
+        rec("error", { where: "net data handler", message: String(err) });
+      }
+    }
   };
 
   // ------------------------------------------------------------ processes
 
   function childProcess() {
-    function proc(cmd) {
+    // OtterCookie's current loader starts each module as `node -` and
+    // writes the module's source to the child's stdin; other builds use
+    // `node -e <code>`. Either way the code never touches eval, so it is
+    // staged here and then run in this sandbox after the current tick,
+    // the way it would start in its own process.
+    function isNode(cmd) {
+      return /(?:^|[\\/])node(?:\.exe)?$/i.test(String(cmd).trim().replace(/^"|"$/g, ""));
+    }
+    function nodeEval(args) {
+      for (let i = 0; i < args.length - 1; i++) {
+        if (["-e", "--eval", "-p", "--print"].indexOf(String(args[i])) >= 0) return String(args[i + 1]);
+      }
+      return null;
+    }
+    function readsStdin(args) {
+      return args.indexOf("-") >= 0 || !args.some((a) => !String(a).startsWith("-"));
+    }
+    function runChild(via, code) {
+      stage(via, code);
+      addTimer(
+        () => {
+          try {
+            runModule(code, host.dirname + (IS_WIN ? "\\" : "/") + "[stdin]");
+          } catch (err) {
+            rec("error", { where: via, message: String(err) });
+          }
+        },
+        0,
+        [],
+        false
+      );
+    }
+    function stdin(cmd, args) {
+      const pipeCode = isNode(cmd) && Array.isArray(args) && nodeEval(args) === null && readsStdin(args);
+      let buf = "";
+      const s = emitter("stdin");
+      s.writable = true;
+      s.write = (chunk) => {
+        if (chunk !== undefined && chunk !== null) buf += isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+        return true;
+      };
+      s.end = (chunk) => {
+        s.write(chunk);
+        if (pipeCode && buf.trim() !== "") runChild("node stdin", buf);
+        buf = "";
+        return s;
+      };
+      return s;
+    }
+    function proc(cmd, args) {
       const p = emitter("ChildProcess");
       p.pid = 4242;
       p.stdout = emitter("stdout");
       p.stderr = emitter("stderr");
-      p.stdin = { write() {}, end() {} };
+      p.stdin = stdin(cmd, args);
       p.kill = () => true;
       p.unref = () => {};
       addTimer(() => p.emit("close", 0), 0, [], false);
@@ -572,7 +675,9 @@
       },
       spawn(cmd, args, opts) {
         rec("exec", { api: "spawn", command: String(cmd), args: args, options: opts });
-        return proc(cmd);
+        const code = isNode(cmd) && Array.isArray(args) ? nodeEval(args) : null;
+        if (code !== null) runChild("node -e", code);
+        return proc(cmd, args);
       },
       spawnSync(cmd, args, opts) {
         rec("exec", { api: "spawnSync", command: String(cmd), args: args, options: opts });
@@ -897,25 +1002,71 @@
     url: () => ({ URL: g.URL, parse: (u) => ({ href: u }) }),
     querystring: () => ({ stringify: (o) => Object.keys(o).map((k) => k + "=" + o[k]).join("&"), parse: () => ({}) }),
     zlib: () => ghost("zlib"),
-    net: () => ({
-      connect(a, b) {
-        rec("net.connect", { target: typeof a === "object" ? (a.host || "") + ":" + a.port : String(b || "") + ":" + String(a) });
-        return emitter("Socket");
-      },
-      createConnection(a, b) {
-        return this.connect(a, b);
-      },
-      Socket: function () {
+    net: () => {
+      // Raw TCP C2 (some BeaverTail builds talk JSON over net.Socket).
+      // The socket "connects" on the next tick so the sample's connect
+      // handler runs and its first message shows up as net.write.
+      function socket() {
         const s = emitter("Socket");
-        s.connect = (port, h) => {
-          rec("net.connect", { target: String(h) + ":" + String(port) });
+        netSockets.push(s);
+        s.writable = true;
+        s.readable = true;
+        s.destroyed = false;
+        s.connecting = false;
+        s.remoteAddress = undefined;
+        s.connect = (a, b, c) => {
+          let port = a;
+          let host = b;
+          let cb = c;
+          if (a && typeof a === "object") {
+            port = a.port;
+            host = a.host;
+            cb = b;
+          } else if (typeof b === "function") {
+            host = undefined;
+            cb = b;
+          }
+          host = host === undefined || host === null ? "localhost" : String(host);
+          rec("net.connect", { target: host + ":" + String(port) });
+          s.remoteAddress = host;
+          s.remotePort = Number(port);
+          if (typeof cb === "function") s.once("connect", cb);
+          addTimer(() => s.emit("connect"), 0, [], false);
+          addTimer(() => s.emit("ready"), 0, [], false);
           return s;
         };
-        s.write = () => true;
-        s.end = () => s;
+        s.write = (data, enc, cb) => {
+          rec("net.write", { target: String(s.remoteAddress) + ":" + String(s.remotePort), data: isBuffer(data) ? data.toString("utf8") : summarize(data) });
+          const done = typeof enc === "function" ? enc : cb;
+          if (typeof done === "function") addTimer(done, 0, [], false);
+          return true;
+        };
+        s.end = (data) => {
+          if (data !== undefined && data !== null) s.write(data);
+          return s;
+        };
+        s.destroy = () => {
+          s.destroyed = true;
+          s.writable = false;
+          return s;
+        };
+        for (const m of ["setTimeout", "setKeepAlive", "setNoDelay", "setEncoding", "ref", "unref", "pause", "resume"]) s[m] = () => s;
+        s.address = () => ({ address: "10.0.2.15", family: "IPv4", port: 49712 });
         return s;
-      },
-    }),
+      }
+      return {
+        connect(a, b, c) {
+          return socket().connect(a, b, c);
+        },
+        createConnection(a, b, c) {
+          return socket().connect(a, b, c);
+        },
+        Socket: function () {
+          return socket();
+        },
+        isIP: (x) => (/^\d{1,3}(\.\d{1,3}){3}$/.test(String(x)) ? 4 : 0),
+      };
+    },
     "form-data": () => {
       const FD = function () {
         const parts = [];
@@ -997,6 +1148,11 @@
   g.__dirname = host.dirname;
   g.__filename = host.filename;
 
+  // Free variables the analyst asked to stub: a payload appended to a
+  // legitimate file (routes, config) still refers to that file's names.
+  for (const name of host.stubs || []) {
+    if (!(name in g)) g[name] = ghost(name);
+  }
   g.__crumbleMain = function (code) {
     return runModule(code, host.filename);
   };

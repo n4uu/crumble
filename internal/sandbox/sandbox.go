@@ -35,6 +35,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/dop251/goja"
+
+	"github.com/n4uu/crumble/internal/jsenv"
 )
 
 //go:embed prelude.js
@@ -64,6 +66,9 @@ type Options struct {
 	Response Response
 	// MaxEvents caps the trace length (default 10000).
 	MaxEvents int
+	// Stubs are global names to define as recording proxies before the
+	// sample runs, for free variables a host file would have provided.
+	Stubs []string
 }
 
 // Response is the canned answer given to every outbound HTTP request.
@@ -86,6 +91,7 @@ type Stage struct {
 	Via    string `json:"via"`
 	Size   int    `json:"size"`
 	SHA256 string `json:"sha256"`
+	Count  int    `json:"count"` // times the same code was staged the same way
 	Code   string `json:"-"`
 }
 
@@ -161,6 +167,9 @@ func Run(src string, opts Options) (*Trace, error) {
 	}
 	r.dir = r.virtualDir()
 
+	if err := jsenv.Install(r.vm); err != nil {
+		return nil, fmt.Errorf("sandbox setup: %w", err)
+	}
 	if err := r.install(); err != nil {
 		return nil, err
 	}
@@ -293,13 +302,23 @@ func (r *runner) install() error {
 		}
 	}
 	set("platform", r.opts.Platform)
+	set("stubs", r.opts.Stubs)
 	set("filename", r.joinVirtual(r.opts.Filename))
 	set("dirname", r.dir)
 	set("record", r.record)
 	set("stage", func(via, code string) {
 		sum := sha256.Sum256([]byte(code))
-		r.trace.Stages = append(r.trace.Stages, Stage{Via: via, Size: len(code), SHA256: hex.EncodeToString(sum[:]), Code: code})
-		r.record("stage", fmt.Sprintf(`{"via":%q,"size":%d,"sha256":%q}`, via, len(code), hex.EncodeToString(sum[:])))
+		h := hex.EncodeToString(sum[:])
+		// Samples that build the same function in a loop would otherwise
+		// fill the trace with copies; keep the first and count the rest.
+		for i := range r.trace.Stages {
+			if st := &r.trace.Stages[i]; st.Via == via && st.SHA256 == h {
+				st.Count++
+				return
+			}
+		}
+		r.trace.Stages = append(r.trace.Stages, Stage{Via: via, Size: len(code), SHA256: h, Count: 1, Code: code})
+		r.record("stage", fmt.Sprintf(`{"via":%q,"size":%d,"sha256":%q}`, via, len(code), h))
 	})
 	set("encode", encode)
 	set("decode", decode)

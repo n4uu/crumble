@@ -92,6 +92,13 @@ func runExtract(args []string) error {
 			return err
 		}
 		resp.Body = string(b)
+		// A JSON body is served as application/json so the HTTP stubs
+		// hand the sample a parsed object, as axios and fetch().json()
+		// would. Some implants only go on to the socket.io stage once the
+		// registration call answers {"success": true}.
+		if json.Valid(b) {
+			resp.ContentType = "application/json"
+		}
 	}
 
 	var reports []*extract.Report

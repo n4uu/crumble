@@ -6,9 +6,11 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,7 @@ type Report struct {
 	Commands     []string         `json:"commands,omitempty"`
 	Files        []string         `json:"files,omitempty"`
 	Crypto       []map[string]any `json:"crypto,omitempty"`
+	TCP          []TCPConn        `json:"tcp,omitempty"`
 	Stages       []sandbox.Stage  `json:"stages,omitempty"`
 	Indicators   []Indicator      `json:"indicators,omitempty"`
 	Modules      []string         `json:"modules,omitempty"`
@@ -91,6 +94,16 @@ type SocketIO struct {
 	CommandExec bool `json:"command_exec,omitempty"`
 }
 
+// TCPConn is a raw TCP connection the sample opened with the net module.
+type TCPConn struct {
+	URL    string `json:"url"`
+	Hello  string `json:"first_write,omitempty"` // first thing the sample sent
+	Writes int    `json:"writes"`
+	// CommandExec is true when the probe, delivered as data from the
+	// server, reached a child_process API.
+	CommandExec bool `json:"command_exec,omitempty"`
+}
+
 // Options configures Extract.
 type Options struct {
 	Name      string
@@ -116,8 +129,21 @@ func Extract(src []byte, opts Options) (*Report, error) {
 	}
 
 	code := string(src)
+	if field, inner, ok := jsonEnvelope(code); ok {
+		rep.Notes = append(rep.Notes, fmt.Sprintf("JSON envelope; analysing the script in field %q (%d bytes)", field, len(inner)))
+		code = inner
+	}
 	d, err := jsdeob.Deobfuscate(code, jsdeob.Options{})
 	switch {
+	case d == nil && errors.Is(err, jsdeob.ErrParse):
+		// Samples get tagged by family, not by file type: batch and shell
+		// droppers from the same campaign land next to the JavaScript.
+		// The URLs in them are still worth having.
+		rep.Notes = append(rep.Notes, "not JavaScript ("+firstLine(err.Error())+"); indicators come from the raw text, nothing was emulated")
+		rep.Indicators = indicators([]string{code})
+		rep.addStaticEndpoints()
+		rep.Verdict = "not JavaScript; static indicators only"
+		return rep, nil
 	case d == nil:
 		return nil, err
 	case errors.Is(err, jsdeob.ErrNoStringArray):
@@ -136,12 +162,15 @@ func Extract(src []byte, opts Options) (*Report, error) {
 	var traces []*sandbox.Trace
 	if !opts.NoEmulate {
 		for _, p := range opts.Platforms {
-			tr, err := sandbox.Run(code, sandbox.Options{
+			tr, stubs, err := emulate(code, sandbox.Options{
 				Platform: p, Root: opts.Root, Probe: true,
 				Response: opts.Response, Budget: opts.Budget, Filename: baseName(opts.Name),
 			})
 			if err != nil {
 				return nil, err
+			}
+			if len(stubs) > 0 {
+				rep.Notes = append(rep.Notes, fmt.Sprintf("%s: sample uses names it never defines (%s), probably from the file it was appended to; re-ran with them stubbed", p, strings.Join(stubs, ", ")))
 			}
 			if tr.TimedOut {
 				rep.Notes = append(rep.Notes, p+": emulation hit its time budget; trace is partial")
@@ -162,6 +191,9 @@ func Extract(src []byte, opts Options) (*Report, error) {
 
 	if rep.Trace != nil {
 		rep.fromTrace(rep.Trace)
+		if len(rep.Trace.Of("antidebug")) > 0 {
+			rep.Notes = append(rep.Notes, "debug protection (Function(\"debugger\") loop) seen and neutralised")
+		}
 	}
 	rep.addStaticEndpoints()
 	rep.Capabilities = capabilities(d.Strings, rep)
@@ -232,6 +264,9 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 	cmds := map[string]bool{}
 	lastProbe := ""
 	lastProbeURL := ""
+	awaitReply := ""
+	tcp := map[string]*TCPConn{}
+	var tcpOrder []string
 
 	addEP := func(raw, role, method string) {
 		ep, key, ok := endpoint(raw)
@@ -282,9 +317,23 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 			if !contains(s.Emits, ev) {
 				s.Emits = append(s.Emits, ev)
 			}
+			if awaitReply == s.URL && s.ReplyEvent == "" {
+				// First thing sent after the probe reached exec: the
+				// command output going back, even if it no longer
+				// contains the probe text.
+				s.ReplyEvent = ev
+				awaitReply = ""
+			}
 			if lastProbe != "" && lastProbeURL == s.URL && s.ReplyEvent == "" {
-				if s.CommandEvent == lastProbe || mentionsProbe(e.Data["args"]) {
-					s.CommandEvent = lastProbe
+				if pe, ok := mentionsProbe(e.Data["args"]); ok {
+					if pe == "" {
+						pe = lastProbe
+					}
+					if s.CommandEvent == "" || s.CommandEvent == pe {
+						s.CommandEvent = pe
+						s.ReplyEvent = ev
+					}
+				} else if s.CommandEvent == lastProbe {
 					s.ReplyEvent = ev
 				}
 			}
@@ -311,11 +360,24 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 				c = strings.Join(parts, " ")
 			}
 			if lastProbe != "" && strings.Contains(c, "crumble-probe") {
-				if s := sockets[lastProbeURL]; s != nil && (s.CommandEvent == "" || s.CommandEvent == lastProbe) {
-					s.CommandEvent = lastProbe
+				pe := probeEvent(c)
+				if pe == "" {
+					pe = lastProbe
+				}
+				if s := sockets[lastProbeURL]; s != nil && (s.CommandEvent == "" || s.CommandEvent == pe) {
+					s.CommandEvent = pe
 					s.CommandExec = true
+					awaitReply = s.URL
+				}
+				if c := tcp[lastProbeURL]; c != nil {
+					c.CommandExec = true
 				}
 				continue // our own probe, not the sample's
+			}
+			// BeaverTail fetches its Python stage with curl rather than
+			// an HTTP module; the URL is still one the sample contacted.
+			for _, u := range urlRE.FindAllString(c, -1) {
+				addEP(strings.TrimRight(u, `.,;)]}"`), "download via shell", "")
 			}
 			if !cmds[c] {
 				cmds[c] = true
@@ -337,7 +399,22 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 			}
 			addEP(u, role, str("method"))
 		case "net.connect":
-			addEP("tcp://"+str("target"), "raw tcp", "")
+			u := "tcp://" + str("target")
+			addEP(u, "raw tcp", "")
+			if tcp[u] == nil {
+				tcp[u] = &TCPConn{URL: u}
+				tcpOrder = append(tcpOrder, u)
+			}
+		case "net.write":
+			if c := tcp["tcp://"+str("target")]; c != nil {
+				c.Writes++
+				if c.Hello == "" {
+					c.Hello = strings.TrimSpace(fmt.Sprint(e.Data["data"]))
+					if len(c.Hello) > 200 {
+						c.Hello = c.Hello[:200] + "..."
+					}
+				}
+			}
 		case "fs.write":
 			files[str("api")+" "+str("path")] = true
 		case "crypto.decipher", "crypto.cipher":
@@ -347,6 +424,9 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 
 	for _, u := range sockOrder {
 		r.SocketIO = append(r.SocketIO, *sockets[u])
+	}
+	for _, u := range tcpOrder {
+		r.TCP = append(r.TCP, *tcp[u])
 	}
 	for _, k := range epOrder {
 		r.C2 = append(r.C2, *endpoints[k])
@@ -362,13 +442,28 @@ func (r *Report) fromTrace(t *sandbox.Trace) {
 	r.Stages = t.Stages
 }
 
-func mentionsProbe(v any) bool {
+// mentionsProbe reports whether v carries the probe text, and which event
+// it was sent to if the text survived intact.
+func mentionsProbe(v any) (string, bool) {
 	for _, s := range traceStrings(&sandbox.Trace{Events: []sandbox.Event{{Data: map[string]any{"v": v}}}}) {
 		if strings.Contains(s, "crumble-probe") {
-			return true
+			return probeEvent(s), true
 		}
 	}
-	return false
+	return "", false
+}
+
+// probeEvent returns the event name tagged onto the probe text in s
+// ("crumble-probe:command" -> "command"), or "" if there is none.
+func probeEvent(s string) string {
+	_, rest, ok := strings.Cut(s, "crumble-probe:")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexAny(rest, " \t\r\n\"'`;&|)"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
 }
 
 // stagedAfter reports whether code was staged (eval, Function, ...) soon
@@ -377,6 +472,11 @@ func stagedAfter(evs []sandbox.Event, i int) bool {
 	for j := i + 1; j < len(evs) && j < i+40; j++ {
 		switch evs[j].Kind {
 		case "stage":
+			// Code handed to a child node process came from the sample,
+			// not from the response.
+			if via, _ := evs[j].Data["via"].(string); strings.HasPrefix(via, "node ") {
+				continue
+			}
 			return true
 		case "http.request":
 			return false
@@ -464,6 +564,67 @@ func rank(role string) int {
 func contains(xs []string, x string) bool {
 	for _, y := range xs {
 		if y == x {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonEnvelope handles stages saved as the server sent them. The first
+// OtterCookie loaders read a JSON response and eval'd one of its fields
+// ({"cookie": "<script>"}). If src is a JSON object, the longest string
+// field that parses as JavaScript is returned.
+func jsonEnvelope(src string) (field, code string, ok bool) {
+	t := strings.TrimSpace(src)
+	if !strings.HasPrefix(t, "{") {
+		return "", "", false
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(t), &obj) != nil {
+		return "", "", false
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v, isStr := obj[k].(string)
+		if !isStr || len(v) <= len(code) || !jsdeob.Parses(v) {
+			continue
+		}
+		field, code, ok = k, v, true
+	}
+	return field, code, ok
+}
+
+var undefinedRE = regexp.MustCompile(`^ReferenceError: ([\p{L}_$][\p{L}\p{N}_$]*) is not defined`)
+
+// emulate runs the sandbox and, when the sample dies on a free variable
+// before doing anything else, runs it again with that name stubbed.
+// BeaverTail is often pasted after the last line of a real source file
+// ("module.exports = router;" and a few hundred spaces), so on its own the
+// first statement throws. At most four names are stubbed.
+func emulate(code string, o sandbox.Options) (*sandbox.Trace, []string, error) {
+	for {
+		tr, err := sandbox.Run(code, o)
+		if err != nil {
+			return nil, nil, err
+		}
+		m := undefinedRE.FindStringSubmatch(tr.Error)
+		if m == nil || len(o.Stubs) >= 4 || contains(o.Stubs, m[1]) || didSomething(tr) {
+			return tr, o.Stubs, nil
+		}
+		o.Stubs = append(o.Stubs, m[1])
+	}
+}
+
+// didSomething reports whether the trace has anything past module loading.
+func didSomething(t *sandbox.Trace) bool {
+	for _, e := range t.Events {
+		switch e.Kind {
+		case "require", "env.read", "console", "error":
+		default:
 			return true
 		}
 	}

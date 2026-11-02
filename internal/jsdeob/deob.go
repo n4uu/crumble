@@ -28,6 +28,8 @@ import (
 	"github.com/dop251/goja/ast"
 	"github.com/dop251/goja/parser"
 	"github.com/dop251/goja/token"
+
+	"github.com/n4uu/crumble/internal/jsenv"
 )
 
 // Result describes what was recovered from one script.
@@ -55,6 +57,12 @@ type Result struct {
 // bootstrap. Plain (or differently obfuscated) scripts still get a Result
 // with Strings filled in, so callers can treat this as informational.
 var ErrNoStringArray = errors.New("no javascript-obfuscator string array found")
+
+// ErrParse wraps the parser error when the input isn't JavaScript.
+var ErrParse = errors.New("parse")
+
+// Parses reports whether src is syntactically valid JavaScript.
+func Parses(src string) bool { return parses(src) }
 
 // Options tunes the deobfuscator. The zero value is usable.
 type Options struct {
@@ -87,7 +95,7 @@ func Deobfuscate(src string, opts Options) (*Result, error) {
 
 	prog, err := parse(src)
 	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrParse, err)
 	}
 
 	res := &Result{Source: src, Encoding: "unknown"}
@@ -105,6 +113,9 @@ func Deobfuscate(src string, opts Options) (*Result, error) {
 	res.Encoding = boot.encoding
 
 	vm := goja.New()
+	if err := jsenv.Install(vm); err != nil {
+		return res, fmt.Errorf("vm setup: %w", err)
+	}
 	if err := runBounded(vm, boot.code(), opts.Timeout); err != nil {
 		return res, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -114,7 +125,7 @@ func Deobfuscate(src string, opts Options) (*Result, error) {
 		known[d] = true
 	}
 
-	cur := src
+	cur, good := src, src
 	for pass := 0; pass < opts.MaxPasses; pass++ {
 		res.Passes++
 		prog, err := parse(cur)
@@ -122,8 +133,10 @@ func Deobfuscate(src string, opts Options) (*Result, error) {
 			// A replacement produced something unparsable. That's a bug
 			// here, not in the sample: stop and keep the last good text.
 			res.Failed++
+			cur = good
 			break
 		}
+		good = cur
 
 		na, nw := defineAliases(vm, prog, cur, known, opts.Timeout)
 		res.Aliases += na
@@ -138,6 +151,12 @@ func Deobfuscate(src string, opts Options) (*Result, error) {
 			break
 		}
 		cur = next
+	}
+	if !parses(cur) {
+		// The last pass broke the text and there was no next pass to
+		// notice. Same as above.
+		res.Failed++
+		cur = good
 	}
 
 	if !opts.KeepBootstrap {

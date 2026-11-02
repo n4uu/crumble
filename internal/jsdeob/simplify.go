@@ -38,14 +38,22 @@ func simplify(src string) string {
 			if !b.Value {
 				live = x.Alternate
 			}
+			end, ok := stmtEnd(src, x)
+			if !ok {
+				return true
+			}
 			text := ";"
 			if live != nil {
-				text = src[idx(live.Idx0()):idx(live.Idx1())]
+				le, ok := stmtEnd(src, live)
+				if !ok {
+					return true
+				}
+				text = src[idx(live.Idx0()):le]
 				if _, isBlock := live.(*ast.BlockStatement); !isBlock {
 					text = "{" + text + "}"
 				}
 			}
-			edits = append(edits, edit{idx(x.Idx0()), idx(x.Idx1()), text})
+			edits = append(edits, edit{idx(x.Idx0()), end, text})
 			return false
 		case *ast.BinaryExpression:
 			if b, ok := literalCompare(x); ok {
@@ -248,4 +256,29 @@ func collectStrings(src string) []string {
 		return true
 	})
 	return out
+}
+
+// stmtEnd returns the byte offset where statement st really ends. goja
+// ends a statement at the last token of its last expression, which leaves
+// out parentheses wrapping that expression: for
+// "else a ? b : (c, d);" the node stops before the ")". Cutting there
+// leaves a stray ")" behind. The end is pushed over closing parentheses
+// until the statement parses on its own inside a function body; ok is false
+// if that never happens, and the caller should leave the statement alone.
+func stmtEnd(src string, st ast.Node) (end int, ok bool) {
+	s, e := idx(st.Idx0()), idx(st.Idx1())
+	for tries := 0; tries < 8; tries++ {
+		if parses("(async function* () { for (;;) {\n" + src[s:e] + "\n} })") {
+			return e, true
+		}
+		j := e
+		for j < len(src) && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
+			j++
+		}
+		if j >= len(src) || src[j] != ')' {
+			break
+		}
+		e = j + 1
+	}
+	return 0, false
 }

@@ -68,6 +68,14 @@ func capabilities(strs []string, r *Report) []Finding {
 			f := Finding{Name: rule.name, Confidence: "static", Evidence: ev}
 			upgrade(&f, r)
 			out = append(out, f)
+		} else if rule.name == "remote shell" {
+			// A raw TCP shell carries no tell-tale string; the probe is
+			// the evidence.
+			f := Finding{Name: rule.name}
+			upgrade(&f, r)
+			if f.Confidence == "observed" {
+				out = append(out, f)
+			}
 		}
 	}
 	return out
@@ -100,6 +108,12 @@ func upgrade(f *Finding, r *Report) {
 			if s.CommandExec {
 				f.Confidence = "observed"
 				f.Evidence = append(f.Evidence, fmt.Sprintf("socket.io %q handler passed its payload to child_process", s.CommandEvent))
+			}
+		}
+		for _, c := range r.TCP {
+			if c.CommandExec {
+				f.Confidence = "observed"
+				f.Evidence = append(f.Evidence, "data received on "+c.URL+" was passed to child_process")
 			}
 		}
 	case "file exfiltration":
@@ -135,10 +149,10 @@ func roles(d *jsdeob.Result, r *Report) []Finding {
 			break
 		}
 	}
-	if len(out) == 0 && hasHTTPClient(r, d) && strings.Contains(d.Source, "eval(") {
-		ev := []string{"HTTP client and eval() in the same script"}
-		if strings.Contains(d.Source, ".response.data") || strings.Contains(d.Source, "response.data") {
-			ev = append(ev, "eval() is fed from response.data (error-handler stage delivery)")
+	if sink := codeSink(d.Source); len(out) == 0 && hasHTTPClient(r, d) && sink != "" {
+		ev := []string{"HTTP client and " + sink + " in the same script"}
+		if strings.Contains(d.Source, "response.data") {
+			ev = append(ev, sink+" is fed from response.data (error-handler stage delivery)")
 		}
 		out = append(out, Finding{"loader", "static", ev})
 	}
@@ -158,6 +172,21 @@ func roles(d *jsdeob.Result, r *Report) []Finding {
 		out = append(out, f)
 	}
 
+	for _, c := range r.TCP {
+		f := Finding{Name: "raw TCP implant", Confidence: "observed", Evidence: []string{"connects to " + c.URL}}
+		if c.CommandExec {
+			f.Evidence = append(f.Evidence, "data from the server is passed to child_process")
+		}
+		if c.Hello != "" {
+			f.Evidence = append(f.Evidence, "first write "+c.Hello)
+		}
+		out = append(out, f)
+	}
+
+	if f, ok := beaverTail(r); ok {
+		out = append(out, f)
+	}
+
 	for _, c := range r.Capabilities {
 		if c.Name == "keylogging" || c.Name == "screen capture" {
 			out = append(out, Finding{"surveillance module", c.Confidence, c.Evidence})
@@ -171,6 +200,46 @@ func roles(d *jsdeob.Result, r *Report) []Finding {
 		}
 	}
 	return out
+}
+
+// beaverTail matches the URL layout public reporting gives for BeaverTail
+// (Unit 42, eSentire, ANY.RUN): the Python stage for InvisibleFerret comes
+// from /pdown, InvisibleFerret itself from /client/<id>, newer builds use
+// /p and /j/<id>, and stolen data goes to /uploads or /keys. One of the
+// download or key paths on the same host:port is enough to name it.
+func beaverTail(r *Report) (Finding, bool) {
+	f := Finding{Name: "BeaverTail-style stealer / downloader", Confidence: "static"}
+	strong := false
+	for _, e := range r.C2 {
+		if e.Port == 0 {
+			continue
+		}
+		p := e.Path
+		switch {
+		case p == "/pdown" || strings.HasPrefix(p, "/client/") || p == "/keys" || strings.HasPrefix(p, "/j/"):
+			strong = true
+		case p == "/uploads" || p == "/p":
+		default:
+			continue
+		}
+		f.Evidence = append(f.Evidence, e.URL)
+		if e.Source == "emulation" {
+			f.Confidence = "observed"
+		}
+	}
+	return f, strong
+}
+
+// codeSink names the first way of running a string as code found in src.
+// Loaders moved from eval to the Function constructor, often reached as
+// Function.constructor or (function(){}).constructor to dodge the name.
+func codeSink(src string) string {
+	for _, s := range []string{"eval(", "Function.constructor", "new Function(", ".constructor.constructor("} {
+		if strings.Contains(src, s) {
+			return strings.TrimSuffix(s, "(") + "()"
+		}
+	}
+	return ""
 }
 
 func stageVia(r *Report) string {
@@ -201,7 +270,7 @@ func hasHTTPClient(r *Report, d *jsdeob.Result) bool {
 // a command/reply event pair, or an error-handler loader), and says
 // "consistent with", because structure alone can't attribute a sample.
 func verdict(r *Report) string {
-	var shell, loader, collector bool
+	var shell, tcpShell, loader, beaver, collector bool
 	for _, f := range r.Roles {
 		switch f.Name {
 		case "socket.io implant":
@@ -216,6 +285,12 @@ func verdict(r *Report) string {
 					loader = true
 				}
 			}
+		case "raw TCP implant":
+			for _, c := range r.TCP {
+				tcpShell = tcpShell || c.CommandExec
+			}
+		case "BeaverTail-style stealer / downloader":
+			beaver = true
 		case "collector", "surveillance module":
 			collector = true
 		}
@@ -223,6 +298,10 @@ func verdict(r *Report) string {
 	switch {
 	case shell:
 		return "consistent with an OtterCookie socket.io shell module"
+	case tcpShell:
+		return "Node.js remote shell over raw TCP, no family match"
+	case beaver:
+		return "consistent with BeaverTail (stealer that fetches the InvisibleFerret Python stage)"
 	case loader:
 		return "consistent with a Contagious Interview loader (remote code delivered in an HTTP response and eval'd)"
 	case collector:
