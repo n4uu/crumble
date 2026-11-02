@@ -1,0 +1,12 @@
+{
+  "name": "node-nvm-ssh-fixture",
+  "version": "1.0.4",
+  "description": "crumble test fixture: shape of the install trigger Talos described, nothing is executed",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "npm run skip",
+    "skip": "node test/fixtures/eval",
+    "test": "mocha"
+  },
+  "license": "MIT"
+}

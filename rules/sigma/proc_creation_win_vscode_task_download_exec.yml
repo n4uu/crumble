@@ -1,0 +1,51 @@
+title: VS Code Task Downloading and Executing Code
+id: 42c4ec36-20b7-4051-bd6f-66b58452f292
+status: experimental
+description: |
+    Detects a shell launched by VS Code that downloads content and pipes it straight into an
+    interpreter. Contagious Interview lures ship a .vscode/tasks.json with
+    runOptions.runOn set to folderOpen, so opening the "take-home assignment" in the editor
+    runs the downloader without the victim typing anything.
+references:
+    - https://www.microsoft.com/en-us/security/blog/2026/03/11/contagious-interview-malware-delivered-through-fake-developer-job-interviews/
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.execution
+    - attack.t1204.002
+    - attack.t1059.001
+    - attack.t1105
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_parent:
+        ParentImage|endswith: '\Code.exe'
+    selection_shell:
+        Image|endswith:
+            - '\cmd.exe'
+            - '\powershell.exe'
+            - '\pwsh.exe'
+    selection_download:
+        CommandLine|contains:
+            - 'curl '
+            - 'curl.exe'
+            - 'wget '
+            - 'Invoke-WebRequest'
+            - 'iwr '
+            - 'irm '
+            - 'Invoke-RestMethod'
+    selection_exec:
+        CommandLine|contains:
+            - '| iex'
+            - '|iex'
+            - 'Invoke-Expression'
+            - '| node'
+            - '|node'
+            - 'node -e'
+            - '| cmd'
+    condition: all of selection_*
+falsepositives:
+    - Project bootstrap tasks that install tooling with a download-and-run one-liner
+level: high

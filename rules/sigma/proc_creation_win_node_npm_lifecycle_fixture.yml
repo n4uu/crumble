@@ -1,0 +1,29 @@
+title: Node.js Executing Extensionless File From a Fixtures Directory
+id: 3fbfd72a-e315-4a1c-a58c-d1bc78ecc036
+status: experimental
+description: |
+    Detects node.exe started with a script path under fixtures\ that has no file extension. The
+    trojanised node-nvm-ssh package Talos analysed chained 'npm run skip' into
+    'node test/fixtures/eval' during install, hiding the loader as test data. Normal test
+    runners execute .js files.
+references:
+    - https://blog.talosintelligence.com/beavertail-and-ottercookie/
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.execution
+    - attack.t1059.007
+    - attack.initial-access
+    - attack.t1195.001
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\node.exe'
+        CommandLine|re: '(?i)[\/]fixtures?[\/][\w-]+("|\s|$)'
+    condition: selection
+falsepositives:
+    - Test suites that run extensionless fixture scripts with node directly
+level: medium

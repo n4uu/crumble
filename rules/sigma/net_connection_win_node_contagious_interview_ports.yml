@@ -1,0 +1,45 @@
+title: Node.js Outbound Connection to Contagious Interview C2 Ports
+id: 0917f339-90a0-41b3-8f80-ec04d9ac03c2
+status: experimental
+description: |
+    Detects node.exe connecting out to the TCP ports reported for this cluster's C2: 1418 for
+    the OtterCookie socket.io listener, 1224/1244/1245 for BeaverTail and InvisibleFerret
+    (shared by the merged BeaverTail/OtterCookie builds). Developer machines rarely have a
+    reason for node to reach a public address on these ports.
+references:
+    - https://blog.talosintelligence.com/beavertail-and-ottercookie/
+    - https://attack.mitre.org/software/S1246/
+    - https://anyrun.substack.com/p/invisibleferret-malware-technical
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.command-and-control
+    - attack.t1571
+    - attack.t1071.001
+    - detection.emerging-threats
+logsource:
+    category: network_connection
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\node.exe'
+        Initiated: 'true'
+        DestinationPort:
+            - 1418
+            - 1224
+            - 1244
+            - 1245
+    filter_main_private:
+        DestinationIp|cidr:
+            - '127.0.0.0/8'
+            - '10.0.0.0/8'
+            - '172.16.0.0/12'
+            - '192.168.0.0/16'
+            - '169.254.0.0/16'
+            - '::1/128'
+            - 'fe80::/10'
+            - 'fc00::/7'
+    condition: selection and not 1 of filter_main_*
+falsepositives:
+    - Internal services that happen to listen on these ports and are reached through a public address
+level: high

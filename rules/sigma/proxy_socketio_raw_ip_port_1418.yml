@@ -1,0 +1,31 @@
+title: Engine.IO Handshake to Raw IP on Port 1418
+id: ee60eccb-9d31-4f29-b339-d6fac2e02c67
+status: experimental
+description: |
+    Detects an Engine.IO / Socket.IO handshake (path /socket.io/ with an EIO= parameter)
+    sent to a bare IPv4 address on port 1418, the listener Cisco Talos documented for the
+    OtterCookie remote shell. socket.io-client always starts with this polling request
+    before upgrading to WebSocket, so it shows up in proxy logs even when the rest of the
+    session doesn't.
+references:
+    - https://blog.talosintelligence.com/beavertail-and-ottercookie/
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.command-and-control
+    - attack.t1071.001
+    - attack.t1571
+    - detection.emerging-threats
+logsource:
+    category: proxy
+detection:
+    selection_path:
+        c-uri|contains|all:
+            - '/socket.io/'
+            - 'EIO='
+    selection_host:
+        cs-host|re: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:1418$'
+    condition: all of selection_*
+falsepositives:
+    - Self-hosted socket.io services on port 1418 reached by IP
+level: high

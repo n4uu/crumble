@@ -1,0 +1,39 @@
+title: Node.js Querying Hardware Vendor Through WMIC
+id: aa3afde0-f920-4ef9-817d-ba1e202aacee
+status: experimental
+description: |
+    Detects node.exe asking WMI for the computer system manufacturer and model. OtterCookie v4
+    added checks for VMware, VirtualBox, Microsoft (Hyper-V) and QEMU and reports the result to
+    its C2 instead of exiting, so the operator can tell sandboxes from real developer machines.
+    On Windows the vendor and model strings are read from Win32_ComputerSystem, through WMIC or CIM.
+references:
+    - https://thehackernews.com/2025/05/ottercookie-v4-adds-vm-detection-and.html
+    - https://www.elastic.co/security-labs/threat-command/contagious-interview-malware-svg-steganography
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.discovery
+    - attack.t1497.001
+    - attack.t1082
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_parent:
+        ParentImage|endswith: '\node.exe'
+    selection_wmic:
+        CommandLine|contains|all:
+            - 'computersystem'
+            - 'get'
+        CommandLine|contains:
+            - 'manufacturer'
+            - 'model'
+    selection_cim:
+        CommandLine|contains|all:
+            - 'Win32_ComputerSystem'
+            - 'Manufacturer'
+    condition: selection_parent and (selection_wmic or selection_cim)
+falsepositives:
+    - Hardware inventory tooling written in Node.js
+level: medium

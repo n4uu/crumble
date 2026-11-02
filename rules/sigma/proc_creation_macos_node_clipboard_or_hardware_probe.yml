@@ -1,0 +1,36 @@
+title: Node.js Shell Child Reading Clipboard or Hardware Model on macOS
+id: 33eb7894-de97-43f0-b0a7-c14a64e2d79c
+status: experimental
+description: |
+    Detects a shell spawned by node on macOS that reads the clipboard with pbpaste or queries
+    the hardware model with system_profiler / ioreg. Cisco Talos reported OtterCookie v5
+    variants polling the clipboard with pbpaste on macOS, and v4 added VM checks that need the
+    hardware vendor/model, which on macOS comes from these two tools.
+references:
+    - https://blog.talosintelligence.com/beavertail-and-ottercookie/
+    - https://thehackernews.com/2025/05/ottercookie-v4-adds-vm-detection-and.html
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.collection
+    - attack.t1115
+    - attack.discovery
+    - attack.t1497.001
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: macos
+detection:
+    selection_parent:
+        ParentImage|endswith: '/node'
+    selection_clipboard:
+        CommandLine|contains: 'pbpaste'
+    selection_hw:
+        CommandLine|contains:
+            - 'system_profiler SPHardwareDataType'
+            - 'ioreg -l'
+            - 'ioreg -rd1 -c IOPlatformExpertDevice'
+    condition: selection_parent and (selection_clipboard or selection_hw)
+falsepositives:
+    - Electron or Node.js desktop apps that integrate with the clipboard through pbpaste
+level: medium

@@ -1,0 +1,11 @@
+{
+  "name": "ordinary-package",
+  "version": "2.3.1",
+  "scripts": {
+    "postinstall": "node scripts/build.js",
+    "prepare": "npm run build",
+    "build": "tsc -p .",
+    "test": "node test/run.js",
+    "bench": "node test/bench"
+  }
+}

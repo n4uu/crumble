@@ -1,0 +1,47 @@
+title: Node.js child_process.exec Running Host Discovery Commands
+id: e3da7e94-cedd-42c6-82c4-bdaef5cba61d
+status: experimental
+description: |
+    Detects node.exe running discovery commands through child_process.exec. On Windows,
+    exec() wraps every command as 'cmd.exe /d /s /c "<command>"', so the parent/child pair
+    plus those exact switches identifies commands issued by JavaScript rather than typed
+    by a user. OtterCookie's socket.io shell module runs operator tasking this way
+    ('command' event in, child_process.exec, output back as 'message').
+references:
+    - https://blog.talosintelligence.com/beavertail-and-ottercookie/
+    - https://www.elastic.co/security-labs/threat-command/contagious-interview-malware-svg-steganography
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.execution
+    - attack.t1059.003
+    - attack.t1059.007
+    - attack.discovery
+    - attack.t1082
+    - attack.t1033
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_parent:
+        ParentImage|endswith: '\node.exe'
+    selection_shell:
+        Image|endswith: '\cmd.exe'
+        CommandLine|contains: ' /d /s /c '
+    selection_recon:
+        CommandLine|contains:
+            - 'whoami'
+            - 'systeminfo'
+            - 'ipconfig'
+            - 'tasklist'
+            - 'net user'
+            - 'net localgroup'
+            - 'nltest'
+            - 'quser'
+            - 'Get-Clipboard'
+            - 'dir %USERPROFILE%'
+    condition: all of selection_*
+falsepositives:
+    - Build scripts and developer tools that shell out to whoami or ipconfig. Baseline node.exe children in developer fleets before alerting.
+level: medium
