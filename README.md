@@ -280,6 +280,17 @@ pySigma. CI does both.
 
 ## Install
 
+Prebuilt binaries for Linux, macOS and Windows (amd64 and arm64) are on the
+[releases page](https://github.com/n4uu/crumble/releases/latest). They're built
+by GitHub Actions from the tagged commit, never on a workstation, and every
+archive carries a signed build provenance attestation:
+
+```sh
+gh attestation verify crumble_*_linux_amd64.tar.gz -R n4uu/crumble
+```
+
+To build from source instead:
+
 ```sh
 git clone https://github.com/n4uu/crumble
 cd crumble

@@ -1,0 +1,42 @@
+# Release builds run in GitHub Actions only (.github/workflows/release.yml),
+# never on a workstation: -trimpath keeps build-machine paths out of the
+# binaries, and every archive gets a SLSA build provenance attestation.
+version: 2
+project_name: crumble
+
+builds:
+  - id: crumble
+    main: ./cmd/crumble
+    binary: crumble
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^ci:"
+      - "^Merge"
