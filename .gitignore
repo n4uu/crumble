@@ -1,0 +1,5 @@
+/bin/
+/demo.pcap
+/demo.pcapng
+/dump/
+*.out

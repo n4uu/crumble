@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l .; exit 1)
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      - name: smoke test (synthetic capture round trip)
+        run: |
+          set -eu
+          go run ./cmd/crumble fixture pcap -out /tmp/demo.pcap
+          go run ./cmd/crumble pcap -json /tmp/demo.pcap > /tmp/demo.json
+          grep -q '"sid": "Gq8vRk2LmZ0aT1xXAAAB"' /tmp/demo.json
+          grep -q 'wallet-recovery.txt' /tmp/demo.json
+
+      - name: smoke test (extract every fixture)
+        run: |
+          set -eu
+          go run ./cmd/crumble extract -json testdata/js/shell.rc4.obf.js | grep -q '"command_event": "command"'
+          go run ./cmd/crumble extract -json -stage-status 500 testdata/js/loader.b64.obf.js | grep -q '"role": "stage delivery"'
+
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install yara-python sigma-cli
+
+      - name: yara positives / negatives
+        run: python3 scripts/test_rules.py
+
+      - name: sigma validation
+        run: sigma check --fail-on-issues rules/sigma
