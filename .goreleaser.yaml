@@ -35,7 +35,7 @@ sboms:
   - artifacts: archive
 
 changelog:
-  sort: asc
+  abbrev: 7
   filters:
     exclude:
       - "^ci:"
