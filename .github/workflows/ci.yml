@@ -36,7 +36,9 @@ jobs:
         run: |
           set -eu
           go run ./cmd/crumble extract -json testdata/js/shell.rc4.obf.js | grep -q '"command_event": "command"'
-          go run ./cmd/crumble extract -json -stage-status 500 testdata/js/loader.b64.obf.js | grep -q '"role": "stage delivery"'
+          # The loader only evals a non-empty error body, so give it one.
+          echo 'void 0' > /tmp/stage.js
+          go run ./cmd/crumble extract -json -stage /tmp/stage.js -stage-status 500 testdata/js/loader.b64.obf.js | grep -q '"role": "stage delivery"'
 
   rules:
     runs-on: ubuntu-latest
