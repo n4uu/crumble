@@ -56,3 +56,9 @@ jobs:
 
       - name: sigma validation
         run: sigma check --fail-on-issues rules/sigma
+
+      - name: suricata rules against synthetic captures
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q suricata
+          ./scripts/test_suricata.sh

@@ -1,0 +1,33 @@
+title: Node.js child_process Launching a Detached Hidden Command
+id: dfe0a3c9-c250-45f7-9c1f-34a6ea329da1
+status: experimental
+description: |
+    Detects the command line the Contagious Interview raw TCP backdoor builds for its
+    ss_exec tasking: child_process.exec on Windows wraps it as cmd.exe /d /s /c, and the
+    implant itself prepends start /b cmd /c "cd /d "<dir>" && <command>" so the operator's
+    command runs detached from the implant's working directory.
+references:
+    - https://github.com/n4uu/crumble#validation-on-real-samples
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.execution
+    - attack.t1059.003
+    - attack.t1059.007
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_parent:
+        ParentImage|endswith: '\node.exe'
+    selection_cmd:
+        Image|endswith: '\cmd.exe'
+        CommandLine|contains|all:
+            - ' /d /s /c '
+            - 'start /b cmd /c '
+            - 'cd /d '
+    condition: all of selection_*
+falsepositives:
+    - Node.js tooling that starts background shells this way. Rare in practice; baseline before alerting.
+level: medium

@@ -6,6 +6,7 @@
   "testdata/rules/pos/loader.rc4.deobf.js": ["ContagiousInterview_Loader_ErrorHandlerEval"],
   "testdata/rules/pos/collector.default.deobf.js": ["OtterCookie_Collector_Strings", "OtterCookie_Surveillance_Module"],
   "testdata/rules/pos/collector.rc4.deobf.js": ["OtterCookie_Collector_Strings", "OtterCookie_Surveillance_Module"],
+  "testdata/rules/pos/tcpbackdoor.deobf.js": ["ContagiousInterview_TCP_Backdoor"],
   "testdata/rules/pos/package.json": ["ContagiousInterview_NPM_Lifecycle_Runs_Fixture"],
   "testdata/rules/pos/.vscode/tasks.json": ["ContagiousInterview_VSCode_FolderOpen_Download"],
   "testdata/js/src/shell.js": ["OtterCookie_SocketIO_Shell"],
@@ -25,5 +26,6 @@
   "testdata/rules/neg/api-client.js": [],
   "testdata/rules/neg/package.json": [],
   "testdata/rules/neg/.vscode/tasks.json": [],
-  "testdata/rules/neg/wallet-docs.md": []
+  "testdata/rules/neg/wallet-docs.md": [],
+  "testdata/rules/neg/tcp-agent.js": []
 }

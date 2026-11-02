@@ -160,3 +160,31 @@ rule ContagiousInterview_VSCode_FolderOpen_Download
     condition:
         filesize < 64KB and $run_on and $fetch and 1 of ($exec*)
 }
+
+rule ContagiousInterview_TCP_Backdoor
+{
+    meta:
+        description = "Node.js backdoor over plain TCP seen with the cleverstack git hook lure: newline-delimited JSON status lines, cd / ss_exec / exec tasking, vscode-ext.lock"
+        author = "n4uu"
+        date = "2026-11-02"
+        reference = "https://github.com/n4uu/crumble#validation-on-real-samples"
+        hash1 = "281d4d60fc99cf7f54819defb1c7c14b9202d46890936c4c6b9ebe3ddc75dd2f"
+        hash2 = "6db4c3d2ab56227d36eff59d1dc9e13eadf9959996fab1e0b04591cc5e637d04"
+        target = "deobfuscated"
+        score = 80
+
+    strings:
+        $net = /require\(\s*['"]net['"]\s*\)/ ascii
+        $cp = "child_process" ascii
+        $lock = "vscode-ext.lock" ascii
+        $marker = ".git-checker" ascii
+        $ss_exec = "ss_exec" ascii
+        $urls = "'URLS'" ascii
+        $connected = "'connected'" ascii
+        $keepalive = "'keepalive'" ascii
+        $status = /['"]?status['"]?\s*:\s*[\w$]{1,40}\s*,\s*['"]?message['"]?\s*:/ ascii
+
+    condition:
+        filesize < 2MB and $net and $cp and $status and
+        ($connected or $keepalive) and 2 of ($lock, $marker, $ss_exec, $urls)
+}

@@ -1,7 +1,7 @@
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build test vet lint test-rules check-sigma fixtures demo clean install
+.PHONY: build test vet lint test-rules test-suricata check-sigma fixtures demo clean install
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/crumble ./cmd/crumble
@@ -20,6 +20,10 @@ lint: vet
 test-rules:
 	python3 scripts/test_rules.py
 	sigma check -i rules/sigma
+
+# Needs suricata on PATH (apt install suricata).
+test-suricata:
+	./scripts/test_suricata.sh
 
 # Regenerates the obfuscated JS fixtures (needs node/npx). Output is committed.
 fixtures:

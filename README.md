@@ -277,6 +277,7 @@ YARA (`rules/yara/ottercookie.yar`):
 | `JavaScriptObfuscator_StringArray_NodeScript` | raw | rotated string array in a Node.js script (hunting) |
 | `ContagiousInterview_NPM_Lifecycle_Runs_Fixture` | raw | install lifecycle running an extensionless file under `fixtures/` |
 | `ContagiousInterview_VSCode_FolderOpen_Download` | raw | `tasks.json` with `runOn: folderOpen` that downloads and executes |
+| `ContagiousInterview_TCP_Backdoor` | deobfuscated | `net` + child_process + JSON status lines + two of `vscode-ext.lock`, `.git-checker`, `ss_exec`, `URLS` |
 
 Most rules target deobfuscated source on purpose. Every literal they would
 need is hidden by the string array until it's undone, and a rule written
@@ -298,10 +299,20 @@ Sigma (`rules/sigma/`):
 | Engine.IO handshake to raw IP on port 1418 | proxy | `/socket.io/?EIO=` to `a.b.c.d:1418` |
 | VS Code task downloading and executing code | process_creation / windows | `Code.exe` -> shell with download piped into an interpreter |
 | Node.js executing extensionless file from fixtures | process_creation / windows | the `node test/fixtures/eval` trigger |
+| Node.js creating vscode-ext.lock in Temp | file_event / windows | the raw TCP backdoor's single-instance lock |
+| Node.js launching a detached hidden command | process_creation / windows | `cmd.exe /d /s /c` wrapping `start /b cmd /c "cd /d ..."`, the backdoor's `ss_exec` |
+
+Suricata (`rules/suricata/`): the raw TCP backdoor's first line,
+`{"status":"connected","message":"<platform>?<id>?<host>?<marker>",...}`, on
+any port, once per connection. The MachineGuid query the backdoor makes is
+left out on purpose: the `node-machine-id` package and plenty of Electron
+apps run the same command.
 
 `make test-rules` runs every YARA rule against `testdata/rules/expect.json`
 (exact match sets, negatives included) and validates the Sigma rules with
-pySigma. CI does both.
+pySigma. `make test-suricata` generates synthetic captures, one speaking the
+backdoor protocol and one with the same JSON where it must not fire, and
+checks the alert counts. CI does all three.
 
 ## Install
 

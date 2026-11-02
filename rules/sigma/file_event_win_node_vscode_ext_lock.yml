@@ -1,0 +1,27 @@
+title: Node.js Creating vscode-ext.lock in the Temp Directory
+id: 11cecd50-bf2f-46cb-93a5-1369d6ab5624
+status: experimental
+description: |
+    Detects node.exe writing vscode-ext.lock to the user's temp directory. The raw TCP
+    backdoor delivered through the Contagious Interview git hook lure (C2 over plain TCP,
+    newline-delimited JSON) uses this file as a single-instance lock and rewrites it every
+    ten minutes. VS Code itself does not create a file with this name.
+references:
+    - https://github.com/n4uu/crumble#validation-on-real-samples
+author: n4uu
+date: 2026-11-02
+tags:
+    - attack.execution
+    - attack.t1059.007
+    - detection.emerging-threats
+logsource:
+    category: file_event
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\node.exe'
+        TargetFilename|endswith: '\AppData\Local\Temp\vscode-ext.lock'
+    condition: selection
+falsepositives:
+    - Unknown
+level: high

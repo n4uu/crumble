@@ -1,0 +1,7 @@
+# Contagious Interview network rules. Tested with Suricata 7 against the
+# synthetic captures from scripts/gen_suricata_pcaps.py (make test-suricata).
+
+# Raw TCP backdoor from the cleverstack git hook lure. First line on every
+# connection: {"status":"connected","message":"<platform>?<machine id>?<host>?<marker>","timestamp":"<ISO 8601>"}
+# Port independent; one alert per connection.
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"Contagious Interview Node.js raw TCP backdoor check-in"; flow:established,to_server; content:"{|22|status|22 3a 22|connected|22 2c 22|message|22 3a 22|"; startswith; pcre:"/^\{\x22status\x22:\x22connected\x22,\x22message\x22:\x22(?:win32|darwin|linux)\?[^?\x22]+\?[^?\x22]+\?[^\x22]*\x22,\x22timestamp\x22:\x22\d{4}-\d\d-\d\dT/"; flowbits:isnotset,ci.tcp.checkin; flowbits:set,ci.tcp.checkin; classtype:trojan-activity; reference:url,threatfox.abuse.ch/browse/tag/ContagiousInterview/; sid:9000001; rev:1;)
