@@ -382,6 +382,10 @@ otherwise.
 | `d0bb5390cdab85dbf283998abf9ba6c1b418c13596ed48ed21a7e3a58b6b82fd` | InvisibleFerret | 2024-12-04 | `hxxp://147.124.214[.]129:1244` (`/keys`, `/j/s0HhMg2`, `/p`) | not listed (host is in URLhaus) | Worked before apart from the verdict. |
 | `9caab205c9f41003f8eb66c13353659e07207ffada927f32755309d41c8af878` | InvisibleFerret | 2025-01-21 | `hxxp://147.124.214[.]129:1244/pdown` | not listed (host is in URLhaus) | Pasted after `module.exports = router;` and 240 spaces, so on its own it died on the first line. Now re-run with `router` stubbed. The C2 is assembled from base64 pieces, so nothing came out before. |
 
+The raw TCP backdoor in rows four and five is written up in full, protocol
+and detections included, in
+[A raw TCP backdoor behind the cleverstack git hook lure](https://n4uu.github.io/2026/raw-tcp-backdoor-cleverstack/).
+
 Only one C2 in the set is in ThreatFox, and it matches. "Not listed" means
 ThreatFox has nothing for that IP:port, host or URL; it is not evidence the
 address is benign. Verdicts are still "consistent with". The BeaverTail
