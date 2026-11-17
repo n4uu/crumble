@@ -28,8 +28,33 @@ import (
 
 type proxyValue struct {
 	str  *string
+	num  *string     // numeric literal source text, e.g. "479", "0x1f", "(-12)"
 	op   token.Token // binary/logical operator template: return p0 OP p1
 	call bool        // call template: return p0(p1, p2, ...)
+}
+
+// numLiteral returns the source text of a numeric literal or of a negated
+// one. The obfuscator's string array wrappers ("stringArrayWrappersType:
+// function") take their index offsets from per-scope constant objects,
+//
+//	const a0db = {a: 479, b: 55, d: 'Lr**'};
+//	function aM(a, b) { return a0d(a - -a0d8.a, b); }
+//	... aM(a0db.a, 'zDx6') ...
+//
+// so numbers have to fold as well as strings, or neither the wrapper nor the
+// call site ever looks constant.
+func numLiteral(e ast.Expression) (*string, bool) {
+	switch v := e.(type) {
+	case *ast.NumberLiteral:
+		s := v.Literal
+		return &s, true
+	case *ast.UnaryExpression:
+		if n, ok := v.Operand.(*ast.NumberLiteral); ok && !v.Postfix && v.Operator == token.MINUS {
+			s := "(-" + n.Literal + ")"
+			return &s, true
+		}
+	}
+	return nil, false
 }
 
 type proxyObj struct {
@@ -122,6 +147,11 @@ func inlineProxies(src string) string {
 				}
 				v := lit.Value.String()
 				p.props[key] = proxyValue{str: &v}
+			} else if n, ok := numLiteral(x.Right); ok {
+				if _, exists := p.props[key]; exists {
+					p.bad = true
+				}
+				p.props[key] = proxyValue{num: n}
 			} else {
 				p.bad = true
 			}
@@ -202,6 +232,8 @@ func inlineProxies(src string) string {
 			}
 			if v, ok := p.props[key]; ok && v.str != nil {
 				edits = append(edits, edit{idx(x.Idx0()), idx(x.Idx1()), quote(*v.str)})
+			} else if ok && v.num != nil {
+				edits = append(edits, edit{idx(x.Idx0()), idx(x.Idx1()), *v.num})
 			}
 			return false
 		}
@@ -303,7 +335,9 @@ func storesOnly(e ast.Expression, dead map[string]bool) bool {
 			return false
 		}
 		if _, ok := as.Right.(*ast.StringLiteral); !ok {
-			return false
+			if _, ok := numLiteral(as.Right); !ok {
+				return false
+			}
 		}
 	}
 	return true
@@ -343,6 +377,10 @@ func proxyFromLiteral(o *ast.ObjectLiteral) *proxyObj {
 			key = k.Name.String()
 		default:
 			return nil
+		}
+		if n, ok := numLiteral(kp.Value); ok {
+			p.props[key] = proxyValue{num: n}
+			continue
 		}
 		switch v := kp.Value.(type) {
 		case *ast.StringLiteral:

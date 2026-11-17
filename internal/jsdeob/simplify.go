@@ -64,7 +64,8 @@ func simplify(src string) string {
 				return true
 			}
 			if s, ok := constString(x); ok {
-				edits = append(edits, edit{idx(x.Idx0()), idx(x.Idx1()), quote(s)})
+				start, end := balanceParens(src, idx(x.Idx0()), idx(x.Idx1()))
+				edits = append(edits, edit{start, end, quote(s)})
 				return false
 			}
 		case *ast.NumberLiteral:
@@ -146,6 +147,51 @@ func constString(e ast.Expression) (string, bool) {
 		return l + r, true
 	}
 	return "", false
+}
+
+// balanceParens widens [start, end) of a constString expression so that it
+// holds as many '(' as ')'. goja keeps no node for parentheses, so the span
+// of 'a' + ('b' + 'c') stops at the last literal and replacing it would leave
+// the closing paren behind. The span holds only string literals, '+', blanks
+// and parentheses, so skipping quoted runs is enough to count them; string
+// array keys like '5)#)' are exactly the case that needs the skipping.
+func balanceParens(src string, start, end int) (int, int) {
+	open, close := 0, 0
+	for i := start; i < end; i++ {
+		switch c := src[i]; c {
+		case '\'', '"', '`':
+			for i++; i < end && src[i] != c; i++ {
+				if src[i] == '\\' {
+					i++
+				}
+			}
+		case '(':
+			open++
+		case ')':
+			close++
+		}
+	}
+	for open > close {
+		j := end
+		for j < len(src) && strings.IndexByte(" \t\r\n", src[j]) >= 0 {
+			j++
+		}
+		if j >= len(src) || src[j] != ')' {
+			break
+		}
+		end, close = j+1, close+1
+	}
+	for close > open {
+		j := start - 1
+		for j >= 0 && strings.IndexByte(" \t\r\n", src[j]) >= 0 {
+			j--
+		}
+		if j < 0 || src[j] != '(' {
+			break
+		}
+		start, open = j, open+1
+	}
+	return start, end
 }
 
 // literalCompare folds 'a' === 'b' style comparisons between two string
