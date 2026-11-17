@@ -137,6 +137,14 @@ func TestSimplify(t *testing.T) {
 		`if ('ab' === 'ab') { go(); } else { stop(); }`: `{ go(); }`,
 		`s = 'ht' + 'tp' + '://';`:                      `s = 'http://';`,
 		`k = a['not-an-ident'];`:                        `k = a['not-an-ident'];`,
+		// goja keeps no paren nodes: the fold has to take the parens with it.
+		`s = 'a' + ('b' + 'c');`:     `s = 'abc';`,
+		`s = ('a' + 'b') + 'c';`:     `s = 'abc';`,
+		`s = f('5)#)' + ('x'));`:     `s = f('5)#)x');`,
+		`s = g(('a' + ')(') + 'b');`: `s = g('a)(b');`,
+		// Constant objects with numbers fold like the string ones, so
+		// wrappers that take their offsets from them become constant.
+		`const o={a:479,b:'k',c:-12};w(o.a,o.b,o.c);`: `w(479,'k',(-12));`,
 	}
 	for in, want := range cases {
 		got := cleanup(in, 8)
