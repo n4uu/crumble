@@ -13,5 +13,5 @@ count() {
 }
 pos=$(count pos)
 neg=$(count neg)
-echo "positive capture: $pos alerts (want 2), negative capture: $neg alerts (want 0)"
-[ "$pos" = 2 ] && [ "$neg" = 0 ]
+echo "positive capture: $pos alerts (want 4), negative capture: $neg alerts (want 0)"
+[ "$pos" = 4 ] && [ "$neg" = 0 ]

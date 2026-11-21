@@ -1,0 +1,38 @@
+title: Node.js REPL Started by Another Node.js Process
+id: 4473b2fc-561d-462d-b378-e117a883c331
+status: experimental
+description: |
+    Detects node started as an interactive REPL ("node -i") by another node process. The
+    PolinRider NullReceiver loader runs its stages this way: it spawns a detached, hidden
+    "node -i", waits for the "> " prompt and types the decrypted code into stdin, so the
+    command line carries no script and nothing is written to disk. Developers start REPLs
+    from a terminal, not from a node parent.
+references:
+    - https://n4uu.github.io/2026/polinrider-tron-to-nullreceiver/#nullreceiver-timed
+    - https://blog.greenflagged.dev/posts/2026-11-03-adminide-stack-eth-dead-drop/
+author: n4uu
+date: 2026-11-21
+tags:
+    - attack.execution
+    - attack.t1059.007
+    - attack.defense-evasion
+    - attack.t1027
+    - detection.emerging-threats
+logsource:
+    category: process_creation
+detection:
+    selection_parent:
+        ParentImage|endswith:
+            - '\node.exe'
+            - '/node'
+    selection_child:
+        Image|endswith:
+            - '\node.exe'
+            - '/node'
+        CommandLine|endswith:
+            - ' -i'
+            - ' --interactive'
+    condition: all of selection_*
+falsepositives:
+    - Test harnesses that drive a Node REPL programmatically (REPL plugin tests, some notebook kernels). Baseline before alerting.
+level: high

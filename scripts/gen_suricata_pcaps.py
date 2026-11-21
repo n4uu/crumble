@@ -3,8 +3,10 @@
 
 Everything is made up: RFC 5737 addresses, example host names, a fake
 MachineGuid. The positive capture speaks the raw TCP backdoor protocol as
-reconstructed by crumble; the negative one has the same JSON in places the
-rule must ignore (an HTTP body, another app, an inbound connection).
+reconstructed by crumble, and a PolinRider NullReceiver stage fetch; the
+negative one has the same JSON and similar HTTP headers in places the rules
+must ignore (an HTTP body, another app, an inbound connection, ordinary
+Sec-Fetch and X-Payload-* headers).
 
     python3 scripts/gen_suricata_pcaps.py pos.pcap neg.pcap
 """
@@ -59,6 +61,11 @@ pos = session("192.0.2.10", "198.51.100.20", 49712, 15152, [
 ]) + session("192.0.2.11", "203.0.113.30", 50111, 443, [
     ("c", ('{"status":"connected","message":"darwin?A1B2C3D4-0000-1111-2222-333344445555?dev-mbp.local?1",' + ts).encode()),
 ])
+UA = b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+pos += session("192.0.2.15", "203.0.113.40", 50400, 443, [
+    ("c", b"HEAD /0x/cls HTTP/1.1\r\nUser-Agent: " + UA + b"\r\nSec-V: A10\r\nHost: 203.0.113.40:443\r\nConnection: close\r\n\r\n"),
+    ("s", b"HTTP/1.1 200 OK\r\nX-Powered-By: Express\r\nX-Payload-B64: ZXhhbXBsZQ==\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+])
 neg = session("192.0.2.12", "203.0.113.31", 50200, 80, [
     ("c", b'POST /api/status HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: 70\r\n\r\n{"status":"connected","message":"win32?a?b?0","timestamp":"2026-11-02"}'),
     ("s", b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
@@ -67,6 +74,13 @@ neg = session("192.0.2.12", "203.0.113.31", 50200, 80, [
     ("c", ('{"status":"ok","message":"",' + ts).encode()),
 ]) + session("203.0.113.33", "192.0.2.14", 40000, 15152, [
     ("c", ('{"status":"connected","message":"linux?abc?host?0",' + ts).encode()),
+])
+neg += session("192.0.2.16", "203.0.113.41", 50500, 443, [
+    ("c", b"GET /0x/tokens?chain=1 HTTP/1.1\r\nUser-Agent: " + UA + b"\r\nSec-Fetch-Mode: cors\r\nHost: 203.0.113.41:443\r\nConnection: close\r\n\r\n"),
+    ("s", b"HTTP/1.1 200 OK\r\nX-Payload-Version: 2\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
+]) + session("192.0.2.17", "203.0.113.42", 50600, 443, [
+    ("c", b"GET /api/status HTTP/1.1\r\nSec-V: 1\r\nHost: 203.0.113.42:443\r\nConnection: close\r\n\r\n"),
+    ("s", b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"),
 ])
 write(sys.argv[1], pos); write(sys.argv[2], neg)
 print(len(pos), len(neg))

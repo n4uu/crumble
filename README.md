@@ -278,6 +278,8 @@ YARA (`rules/yara/ottercookie.yar`):
 | `ContagiousInterview_NPM_Lifecycle_Runs_Fixture` | raw | install lifecycle running an extensionless file under `fixtures/` |
 | `ContagiousInterview_VSCode_FolderOpen_Download` | raw | `tasks.json` with `runOn: folderOpen` that downloads and executes |
 | `ContagiousInterview_TCP_Backdoor` | deobfuscated | `net` + child_process + JSON status lines + two of `vscode-ext.lock`, `.git-checker`, `ss_exec`, `URLS` |
+| `PolinRider_NullReceiver_Loader` | deobfuscated or plain | Ethereum RPC + `/0x/cls` and `/0x/ls` + `x-payload-b64` or `Sec-V`; fires on all six NullReceiver loaders from MalwareBazaar on 7 November 2026 |
+| `PolinRider_EthIndex_BSC_Stage_Loader` | deobfuscated | Ethereum block scan + a BSC node + `?.?` + the recipient read as `substring(2, 10)`: the 7 October 2026 loaders that point to BSC stages by block and position |
 
 Most rules target deobfuscated source on purpose. Every literal they would
 need is hidden by the string array until it's undone, and a rule written
@@ -301,18 +303,24 @@ Sigma (`rules/sigma/`):
 | Node.js executing extensionless file from fixtures | process_creation / windows | the `node test/fixtures/eval` trigger |
 | Node.js creating vscode-ext.lock in Temp | file_event / windows | the raw TCP backdoor's single-instance lock |
 | Node.js launching a detached hidden command | process_creation / windows | `cmd.exe /d /s /c` wrapping `start /b cmd /c "cd /d ..."`, the backdoor's `ss_exec` |
+| Node.js REPL started by another Node.js process | process_creation | `node -i` with a `node` parent, how NullReceiver runs its stages without a script on disk |
+| Node.js writing to editor or npm startup code | file_event | `node` writing `@vscode/deviceid/dist/index.js` or npm's `lib/cli.js`, the RAT's persistence; npm self-update excluded |
 
 Suricata (`rules/suricata/`): the raw TCP backdoor's first line,
 `{"status":"connected","message":"<platform>?<id>?<host>?<marker>",...}`, on
 any port, once per connection. The MachineGuid query the backdoor makes is
 left out on purpose: the `node-machine-id` package and plenty of Electron
-apps run the same command.
+apps run the same command. Two more for PolinRider's NullReceiver loader:
+a plain-HTTP request to port 443 for `/0x/...` with a `Sec-V` header, and a
+response carrying `X-Payload-B64`. The negative capture has ordinary
+`Sec-Fetch-*` and `X-Payload-*` headers and a `Sec-V` header outside `/0x/`.
 
 `make test-rules` runs every YARA rule against `testdata/rules/expect.json`
 (exact match sets, negatives included) and validates the Sigma rules with
 pySigma. `make test-suricata` generates synthetic captures, one speaking the
-backdoor protocol and one with the same JSON where it must not fire, and
-checks the alert counts. CI does all three.
+backdoor protocol and the NullReceiver stage fetch, and one with the same
+JSON and similar headers where nothing must fire, and checks the alert
+counts. CI does all three.
 
 ## Install
 

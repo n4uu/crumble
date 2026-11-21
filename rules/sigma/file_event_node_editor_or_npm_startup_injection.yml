@@ -1,0 +1,40 @@
+title: Node.js Writing to Editor or npm Startup Code
+id: 7146b402-10a2-48d1-b197-cb8161833b0c
+status: experimental
+description: |
+    Detects a node process writing to files that VS Code, Cursor and Antigravity
+    (@vscode/deviceid) or npm itself (lib/cli.js) load on every start. The PolinRider RAT
+    appends its stager to these files so it runs again whenever the editor opens or npm
+    runs. Neither file is written by node during normal use; npm updating itself is
+    excluded by command line.
+references:
+    - https://n4uu.github.io/2026/polinrider-tron-to-nullreceiver/#the-changelog-may-to-june
+    - https://github.com/OsamaCodes62/nullreceiver-analysis
+author: n4uu
+date: 2026-11-21
+tags:
+    - attack.persistence
+    - attack.t1554
+    - detection.emerging-threats
+logsource:
+    category: file_event
+detection:
+    selection_writer:
+        Image|endswith:
+            - '\node.exe'
+            - '/node'
+    selection_target:
+        TargetFilename|endswith:
+            - '\node_modules\@vscode\deviceid\dist\index.js'
+            - '/node_modules/@vscode/deviceid/dist/index.js'
+            - '\node_modules\npm\lib\cli.js'
+            - '/node_modules/npm/lib/cli.js'
+    filter_npm_self_update:
+        CommandLine|contains|all:
+            - 'npm'
+            - ' -g'
+            - 'npm@'
+    condition: all of selection_* and not filter_npm_self_update
+falsepositives:
+    - Patch tools that modify editor or npm internals on purpose. Rare.
+level: high

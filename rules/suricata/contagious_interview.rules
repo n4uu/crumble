@@ -5,3 +5,10 @@
 # connection: {"status":"connected","message":"<platform>?<machine id>?<host>?<marker>","timestamp":"<ISO 8601>"}
 # Port independent; one alert per connection.
 alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"Contagious Interview Node.js raw TCP backdoor check-in"; flow:established,to_server; content:"{|22|status|22 3a 22|connected|22 2c 22|message|22 3a 22|"; startswith; pcre:"/^\{\x22status\x22:\x22connected\x22,\x22message\x22:\x22(?:win32|darwin|linux)\?[^?\x22]+\?[^?\x22]+\?[^\x22]*\x22,\x22timestamp\x22:\x22\d{4}-\d\d-\d\dT/"; flowbits:isnotset,ci.tcp.checkin; flowbits:set,ci.tcp.checkin; classtype:trojan-activity; reference:url,threatfox.abuse.ch/browse/tag/ContagiousInterview/; sid:9000001; rev:1;)
+
+# PolinRider NullReceiver stage 1 fetching /0x/cls and /0x/ls from the C2 it read
+# off Ethereum. Plain HTTP on port 443, with a Sec-V header carrying the campaign
+# tag; the stage comes back in the body or in an X-Payload-B64 response header.
+# https://n4uu.github.io/2026/polinrider-tron-to-nullreceiver/
+alert http $HOME_NET any -> $EXTERNAL_NET 443 (msg:"PolinRider NullReceiver stage request, plain HTTP on 443 with Sec-V header"; flow:established,to_server; http.uri; content:"/0x/"; startswith; http.header_names; content:"|0d 0a|Sec-V|0d 0a|"; classtype:trojan-activity; reference:url,n4uu.github.io/2026/polinrider-tron-to-nullreceiver/; sid:9000002; rev:1;)
+alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"PolinRider NullReceiver stage in X-Payload-B64 response header"; flow:established,to_client; http.header_names; content:"|0d 0a|X-Payload-B64|0d 0a|"; nocase; classtype:trojan-activity; reference:url,n4uu.github.io/2026/polinrider-tron-to-nullreceiver/; sid:9000003; rev:1;)
